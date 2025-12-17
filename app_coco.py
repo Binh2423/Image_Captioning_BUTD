@@ -1,29 +1,28 @@
-import collections, collections.abc
-for _n in ("Mapping", "MutableMapping", "Sequence"):
-    if not hasattr(collections, _n):
-        setattr(collections, _n, getattr(collections.abc, _n))
 
+try:
+    from PIL import Image as _PIL_Image
+    _alias = {"ANTIALIAS": "LANCZOS", "LINEAR": "BILINEAR", "CUBIC": "BICUBIC"}
+    try:
+        Resampling = _PIL_Image.Resampling  # Pillow >= 10
+        if not hasattr(_PIL_Image, "LANCZOS"):  setattr(_PIL_Image, "LANCZOS",  Resampling.LANCZOS)
+        if not hasattr(_PIL_Image, "BILINEAR"): setattr(_PIL_Image, "BILINEAR", Resampling.BILINEAR)
+        if not hasattr(_PIL_Image, "BICUBIC"):  setattr(_PIL_Image, "BICUBIC",  Resampling.BICUBIC)
+    except Exception:
+        pass
+    for old_name, new_name in _alias.items():
+        if not hasattr(_PIL_Image, old_name) and hasattr(_PIL_Image, new_name):
+            setattr(_PIL_Image, old_name, getattr(_PIL_Image, new_name))
+except Exception:
+    pass
+# -----------------------------------------------
 
 import os, io, json, base64, collections, collections.abc, numpy as np, cv2, torch, gradio as gr, time, hashlib, warnings
 from typing import List, Dict
 
-# ========== Stability: pillow shim (no deprecated constants) ==========
-try:
-    from PIL import Image as PILImage
-    try:
-        Resampling = PILImage.Resampling  # Pillow >=10
-        if not hasattr(PILImage, "LANCZOS"):  setattr(PILImage, "LANCZOS",  Resampling.LANCZOS)
-        if not hasattr(PILImage, "BILINEAR"): setattr(PILImage, "BILINEAR", Resampling.BILINEAR)
-        if not hasattr(PILImage, "BICUBIC"):  setattr(PILImage, "BICUBIC",  Resampling.BICUBIC)
-    except Exception:
-        pass
-except Exception:
-    pass
-
 # Optional: disable Gradio analytics notice
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
-# ========== Stability: patch gradio_client JSON schema path (bool schemas) ==========
+# ---- Patch gradio_client JSON schema path (bool schemas) ----
 try:
     import gradio_client.utils as _gcu
     _orig_get_type = getattr(_gcu, "get_type", None)
@@ -45,6 +44,7 @@ try:
         _gcu._json_schema_to_python_type = _safe__json_schema_to_python_type
 except Exception:
     pass
+# ------------------------------------------------------------
 
 # ========== General settings ==========
 warnings.filterwarnings("ignore", message="torch.meshgrid: in an upcoming release")
@@ -59,110 +59,181 @@ try: torch.set_float32_matmul_precision("high")
 except Exception: pass
 
 # ========== Paths via env ==========
-YAML        = os.environ.get("BUTD_YAML",   r"D:\DACN\project\SCAN\py-bottom-up-attention\configs\VG-Detection\faster_rcnn_R_101_C4_attr_caffemaxpool.yaml")
-WEIGHT      = os.environ.get("BUTD_WEIGHT", r"D:\DACN\project\SCAN\py-bottom-up-attention\checkpoints\faster_rcnn_from_caffe_attr.pkl")
-VOCAB_JSON  = os.environ.get("BUTD_VOCAB",  r"D:\DACN\project\SCAN\py-bottom-up-attention\checkpoints\vocab_coco.json")
-CE_CKPT     = os.environ.get("BUTD_CE_CKPT",   r"D:\DACN\project\SCAN\py-bottom-up-attention\checkpoints\xe_best.pt")
-SCST_CKPT   = os.environ.get("BUTD_SCST_CKPT", r"D:\DACN\project\SCAN\py-bottom-up-attention\checkpoints\scst_best.pt")
-
-OBJ_VOCAB   = os.environ.get("BUTD_OBJ_VOCAB",  r"D:\DACN\project\SCAN\py-bottom-up-attention\demo\data\genome\1600-400-20\objects_vocab.txt")
-ATTR_VOCAB  = os.environ.get("BUTD_ATTR_VOCAB", r"D:\DACN\project\SCAN\py-bottom-up-attention\demo\data\genome\1600-400-20\attributes_vocab.txt")
+YAML        = os.environ.get("BUTD_YAML",   r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/faster_rcnn_R_101_C4_attr_caffemaxpool.yaml")
+WEIGHT      = os.environ.get("BUTD_WEIGHT", r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/faster_rcnn_from_caffe_attr.pkl")
+VOCAB_JSON  = os.environ.get("BUTD_VOCAB",  r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/vocab_coco.json")
+CE_CKPT     = os.environ.get("BUTD_CE_CKPT",   r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/xe_best.pt")
+SCST_CKPT   = os.environ.get("BUTD_SCST_CKPT", r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/scst_best.pt")
+OBJ_VOCAB   = os.environ.get("BUTD_OBJ_VOCAB",  r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/objects_vocab.txt")
+ATTR_VOCAB  = os.environ.get("BUTD_ATTR_VOCAB", r"/home/aurora/Image_Captioning_BUTD/.venv310/checkpoints/attributes_vocab.txt")
 
 NUM_OBJECTS = int(os.environ.get("BUTD_NUM_OBJECTS", "36"))
 MIN_SIZE_TEST = int(os.environ.get("BUTD_MIN_TEST", "600"))
 MAX_SIZE_TEST = int(os.environ.get("BUTD_MAX_TEST", "1000"))
-RPN_POST_NMS_TOPK_TEST = int(os.environ.get("BUTD_RPN_TOPK", "150"))
 
-# ========== Detectron2 BUTD ==========
+# ========== Detectron2 imports ==========
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultPredictor
 from detectron2.data.transforms import ResizeShortestEdge
 from detectron2.modeling.postprocessing import detector_postprocess
-from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputs, fast_rcnn_inference_single_image
+from detectron2.structures import Boxes, Instances, pairwise_iou  # dùng hàm chính thức
+from detectron2.layers import nms                                  # NMS chính thức
 from detectron2.data import MetadataCatalog
+import torch.nn.functional as F
 
+# ========== Build predictor (BUTD C4 attr) ==========
 def build_butd_predictor(yaml_path, weight_path, device=DEVICE):
     assert os.path.isfile(yaml_path), f"Missing YAML: {yaml_path}"
     assert os.path.isfile(weight_path), f"Missing WEIGHT: {weight_path}"
+
     cfg = get_cfg()
     cfg.set_new_allowed(True); cfg.merge_from_file(yaml_path); cfg.set_new_allowed(False)
+
     cfg.MODEL.WEIGHTS = weight_path
-    cfg.MODEL.DEVICE = device
+    cfg.MODEL.DEVICE  = device
+
+    # C4: RPN dùng res4, conv_dim=512 để khớp checkpoint Caffe
+    cfg.MODEL.RPN.HEAD_NAME   = "StandardRPNHead"
+    cfg.MODEL.RPN.IN_FEATURES = ["res4"]
+    cfg.MODEL.RPN.CONV_DIMS   = [512]
+
+    # ROI heads Res5 trên đặc trưng res4
+    cfg.MODEL.ROI_HEADS.IN_FEATURES = ["res4"]
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.6
-    cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST   = 0.6
-    cfg.MODEL.RPN.POST_NMS_TOPK_TEST      = RPN_POST_NMS_TOPK_TEST
+    cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST   = 0.5
+
+    # Cho phép nhiều candidate, phần sau tự NMS gộp lớp
+    cfg.TEST.DETECTIONS_PER_IMAGE = max(int(cfg.TEST.DETECTIONS_PER_IMAGE), NUM_OBJECTS * 8, 400)
+
+    # Resize như BUTD
     cfg.INPUT.MIN_SIZE_TEST = MIN_SIZE_TEST
     cfg.INPUT.MAX_SIZE_TEST = MAX_SIZE_TEST
+
     predictor = DefaultPredictor(cfg)
     predictor.aug = ResizeShortestEdge(int(MIN_SIZE_TEST), int(MAX_SIZE_TEST))
 
+    # vocab (để hiển thị label đúng)
     meta = MetadataCatalog.get("vg")
+
     def _read_txt(p):
         if p and os.path.isfile(p):
             with open(p, "r", encoding="utf-8") as f:
                 return [ln.strip() for ln in f if ln.strip()]
         return None
-    objs = _read_txt(OBJ_VOCAB)
-    attrs= _read_txt(ATTR_VOCAB)
-    if objs:  meta.set(thing_classes=objs)
-    else:     meta.set(thing_classes=[f"cls_{i}" for i in range(1600)])
-    if attrs: meta.set(attr_classes=attrs)
-    else:     meta.set(attr_classes=[f"attr_{i}" for i in range(400)])
+
+    objs  = _read_txt(OBJ_VOCAB)
+    attrs = _read_txt(ATTR_VOCAB)
+    meta.set(thing_classes = objs  if objs  else [f"cls_{i}"  for i in range(1600)])
+    meta.set(attr_classes  = attrs if attrs else [f"attr_{i}" for i in range(400)])
     predictor.meta = meta
     return predictor
 
+# ========== Class-agnostic selection + NMS ==========
+def _class_agnostic_select(pred_cls_logits, pred_deltas, proposals, box2box, topk, iou_thr=0.5):
+    """
+    Chọn 1 lớp tốt nhất cho mỗi RoI rồi làm NMS gộp lớp.
+    Trả về: keep_idx (R_kept,), boxes_xyxy (N,4), scores (N,), classes (N,)
+    """
+    probs = F.softmax(pred_cls_logits, dim=-1)          # (R, K+1)
+    scores = probs[:, :-1]                              # (R, K)
+
+    max_scores, max_classes = scores.max(dim=-1)        # (R,), (R,)
+
+    R, Kp1 = probs.shape
+    K = Kp1 - 1
+    all_boxes = box2box.apply_deltas(pred_deltas, proposals.proposal_boxes.tensor)  # (R, K*4)
+    all_boxes = all_boxes.view(R, K, 4)
+    arng = torch.arange(R, device=all_boxes.device)
+    chosen_boxes = all_boxes[arng, max_classes]         # (R, 4)
+
+    keep = nms(chosen_boxes, max_scores, iou_thr)       # class-agnostic NMS
+
+    # sort by score and clip to topk
+    keep_scores = max_scores[keep]
+    order = torch.argsort(keep_scores, descending=True)[:topk]
+    keep = keep.index_select(0, order)
+
+    return keep, chosen_boxes[keep], max_scores[keep], max_classes[keep]
+
+# ========== BUTD feature extraction (36 x 2048) ==========
 @torch.no_grad()
 def butd_extract_36x2048(predictor, im_bgr: np.ndarray, num_objects: int = NUM_OBJECTS):
-    model = predictor.model; model.eval()
+    """
+    Trả về (inst, roi_feats[ K x 2048 ])
+    Pipeline: preprocess → backbone → RPN → ROIAlign → box_head → box_predictor
+              → class-agnostic NMS → map boxes về size gốc → cắt đúng K features.
+    """
+    model = predictor.model
+    model.eval()
+
     H, W = im_bgr.shape[:2]
     img_rgb = im_bgr[:, :, ::-1].copy()
     tfm = predictor.aug.get_transform(img_rgb)
     img_tfm = tfm.apply_image(img_rgb)
-    chw = np.ascontiguousarray(img_tfm.transpose(2, 0, 1)).copy()
+    chw  = np.ascontiguousarray(img_tfm.transpose(2, 0, 1))
     tensor = torch.from_numpy(chw).to(model.device, non_blocking=True).float()
     inputs = [{"image": tensor, "height": H, "width": W}]
+
     use_amp = (model.device.type == "cuda")
-    with torch.inference_mode(), torch.cuda.amp.autocast(enabled=use_amp):
-        images = model.preprocess_image(inputs)
-        feats_all = model.backbone(images.tensor)
+    with torch.inference_mode(), torch.amp.autocast(device_type="cuda", enabled=use_amp):
+        # 1) preprocess + backbone
+        images   = model.preprocess_image(inputs)
+        feats_all= model.backbone(images.tensor)
+
+        # 2) proposals
         proposals, _ = model.proposal_generator(images, feats_all, None)
-        prop = proposals[0]
+        prop0 = proposals[0]
+
+        # 3) ROIAlign + box head
         in_feats = [feats_all[f] for f in model.roi_heads.in_features if f in feats_all]
-        box_feats = model.roi_heads._shared_roi_transform(in_feats, [prop.proposal_boxes])
+        box_feats = model.roi_heads._shared_roi_transform(in_feats, [prop0.proposal_boxes])
+
         if hasattr(model.roi_heads, "box_head"):
-            pooled = model.roi_heads.box_head(box_feats)
+            pooled = model.roi_heads.box_head(box_feats)   # (R, 2048)
         else:
-            pooled = torch.nn.functional.adaptive_avg_pool2d(box_feats, (1,1)).flatten(1)
-        outputs_tuple = model.roi_heads.box_predictor(pooled)
-        if len(outputs_tuple) == 3:
-            pred_cls_logits, pred_attr_logits, pred_deltas = outputs_tuple
+            pooled = torch.nn.functional.adaptive_avg_pool2d(box_feats, (1, 1)).flatten(1)
+
+        # 4) predictor
+        outputs = model.roi_heads.box_predictor(pooled)
+        if isinstance(outputs, (list, tuple)) and len(outputs) == 3:
+            pred_cls_logits, pred_attr_logits, pred_deltas = outputs
         else:
-            pred_cls_logits, pred_deltas = outputs_tuple
+            pred_cls_logits, pred_deltas = outputs
             pred_attr_logits = None
-        fr_outputs = FastRCNNOutputs(model.roi_heads.box2box_transform,
-                                     pred_cls_logits, pred_deltas, proposals, model.roi_heads.smooth_l1_beta)
-        probs = fr_outputs.predict_probs()[0]
-        boxes = fr_outputs.predict_boxes()[0]
-    keep_ids = None; inst = None
-    for th in np.arange(0.5, 1.01, 0.1):
-        inst_try, ids = fast_rcnn_inference_single_image(
-            boxes, probs, img_tfm.shape[:2], score_thresh=0.6, nms_thresh=th, topk_per_image=num_objects
+
+        # 5) Class-agnostic NMS
+        topk_for_nms = max(num_objects * 6, 300)
+        box2box = model.roi_heads.box_predictor.box2box_transform
+        keep_idx, kept_boxes, kept_scores, kept_classes = _class_agnostic_select(
+            pred_cls_logits, pred_deltas, prop0, box2box, topk=topk_for_nms, iou_thr=0.5
         )
-        if len(ids) == num_objects:
-            inst, keep_ids = inst_try, ids; break
-    if keep_ids is None:
-        inst, keep_ids = fast_rcnn_inference_single_image(
-            boxes, probs, img_tfm.shape[:2], score_thresh=0.0, nms_thresh=0.6, topk_per_image=num_objects
-        )
-    keep_ids = keep_ids.to(pooled.device)
-    roi_feats = pooled.index_select(0, keep_ids).detach().cpu().numpy().astype("float32")
-    if pred_attr_logits is not None:
-        attr_prob = pred_attr_logits[..., :-1].softmax(-1)
-        max_attr_prob, max_attr_label = attr_prob.max(-1)
-        inst.attr_scores  = max_attr_prob.index_select(0, keep_ids).detach().cpu()
-        inst.attr_classes = max_attr_label.index_select(0, keep_ids).detach().cpu()
-    inst = detector_postprocess(inst.to("cpu"), H, W)
-    return inst, roi_feats
+
+        # 6) Giới hạn đúng num_objects
+        if keep_idx.numel() > num_objects:
+            keep_idx = keep_idx[:num_objects]
+            kept_boxes   = kept_boxes[:num_objects]
+            kept_scores  = kept_scores[:num_objects]
+            kept_classes = kept_classes[:num_objects]
+
+        # 7) Instances ở size đã resize rồi map về (H,W) gốc
+        inst_rsz = Instances(images.image_sizes[0])
+        inst_rsz.pred_boxes   = Boxes(kept_boxes)
+        inst_rsz.scores       = kept_scores
+        inst_rsz.pred_classes = kept_classes
+
+        inst = detector_postprocess(inst_rsz, H, W)
+
+        # 8) Lấy ROI features theo keep_idx
+        roi_feats = pooled.index_select(0, keep_idx.to(pooled.device)).detach().cpu().numpy().astype("float32")
+
+        # 9) Attributes (nếu có)
+        if pred_attr_logits is not None:
+            attr_prob = pred_attr_logits[..., :-1].softmax(-1)
+            max_attr_prob, max_attr_label = attr_prob.max(-1)
+            inst.attr_scores  = max_attr_prob.index_select(0, keep_idx).detach().cpu()
+            inst.attr_classes = max_attr_label.index_select(0, keep_idx).detach().cpu()
+
+    return inst.to("cpu"), roi_feats
 
 # ========== UpDown 2-LSTM decoder ==========
 import torch.nn as nn
@@ -444,7 +515,6 @@ def run_pipeline(pil_image, k_draw, draw_labels, cache_feats, decode_strategy, b
     t0 = time.time()
     img_rgb = np.array(pil_image)
     img_bgr = img_rgb[:, :, ::-1].copy()
-    H,W = img_bgr.shape[:2]
 
     key = _img_hash(pil_image) if cache_feats else None
     if key and key in _feat_cache:
@@ -519,11 +589,10 @@ with gr.Blocks(title="COCO Captioning (BUTD + UpDown) – CE vs SCST", css=".gr-
                     outputs=[out_img, out_ce, out_sc, timing])
 
 if __name__ == "__main__":
-    # Keep share=False by default (turn True only if localhost is blocked)
     demo.queue().launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        show_api=False,   # IMPORTANT: avoid schema path that caused "bool is not iterable"
+        show_api=False,
         max_threads=8
     )

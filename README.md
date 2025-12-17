@@ -1,182 +1,182 @@
-# Image Captioning (BUTD + UpDown) — Hướng dẫn đầy đủ (WSL & Kaggle, tiếng Việt)
+# Image Captioning – BUTD + UpDown (WSL)
 
-> **Mục tiêu**: Chạy demo caption ảnh (so sánh CE vs SCST), và *tuỳ chọn* huấn luyện trên Kaggle dùng **SCAN features** (không cần ảnh thô). Tài liệu này gọn, thực dụng, dành cho **WSL (Ubuntu)** và **Kaggle**.
+> **Mục tiêu**: Chạy demo caption ảnh (BUTD + UpDown 2‑LSTM, hai mô hình CE & SCST) trên **WSL Ubuntu**, dùng sẵn các checkpoint bạn đã để trong thư mục `checkpoints/`. README này hướng dẫn **từ A→Z**: cài môi trường bằng `setup.sh`, đặt file nặng đúng chỗ, chạy Gradio UI, và (tùy chọn) train trên Kaggle bằng **SCAN features**.
 
 ---
 
-## 0) Cấu trúc dự án (tối thiểu)
+## 1) Yêu cầu hệ thống (WSL)
+
+- **Windows 10/11** + **WSL2**, khuyến nghị Ubuntu **20.04/22.04**.
+- Python **3.10** (script `setup.sh` sẽ tự cài venv).
+- (Tùy chọn) GPU CUDA cho inference/training nhanh hơn. Nếu không có CUDA vẫn chạy được CPU.
+
+> Lưu ý: Toàn bộ hướng dẫn này **dành cho WSL**. Không cần Anaconda.
+
+---
+
+## 2) Cấu trúc thư mục (chuẩn để chạy)
+
+Tại thư mục dự án (ví dụ: `~/Image_Captioning_BUTD/`) bạn nên có:
+
 ```
-.
-├─ app_coco.py                 # App Gradio (đã patch cho Detectron2==0.6 và UI beam search)
-├─ setup.sh                    # Script cài môi trường tự động cho WSL
-├─ requirements.txt            # Thư viện nền
-├─ README_FULL_VI.md           # (file này)
-└─ checkpoints/                # Nơi để trọng số & vocab (tạo khi tải về)
-   ├─ faster_rcnn_from_caffe_attr.pkl  # Trọng số detector BUTD (>=200MB)
-   ├─ faster_rcnn_R_101_C4_attr_caffemaxpool.yaml
-   ├─ vocab_coco.json
-   ├─ xe_best.pt               # CE checkpoint (tùy chọn)
-   └─ scst_best.pt             # SCST checkpoint (tùy chọn)
+Image_Captioning_BUTD/
+├─ app_coco.py
+├─ setup.sh
+├─ README.md  (file này)
+├─ .venv310/  (tự tạo sau khi chạy setup.sh)
+├─ checkpoints/
+│  ├─ faster_rcnn_from_caffe_attr.pkl
+│  ├─ faster_rcnn_R_101_C4_attr_caffemaxpool.yaml
+│  ├─ objects_vocab.txt
+│  ├─ attributes_vocab.txt
+│  ├─ vocab_coco.json
+│  ├─ xe_best.pt
+│  └─ scst_best.pt
+└─ (tùy chọn) iamge-captioning-butd.ipynb, d2_compat_smoke.py, ...
 ```
 
----
+> **Bạn đã có sẵn** những file ở `checkpoints/` (theo ảnh Drive bạn gửi). Nếu còn thiếu **duy nhất** file nặng `faster_rcnn_from_caffe_attr.pkl`, tải ở link dưới rồi đặt vào `checkpoints/`.
 
-## 1) Chuẩn bị **checkpoints**
+- Link TẢI trực tiếp (BUTD Caffe weights):  
+  **http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl**  
+  (Đặt đúng tên file trong `checkpoints/` như trên)
 
-### Cách A — Dùng Google Drive (khuyên dùng)
-Bạn đã có đầy đủ file tại thư mục Drive này (public của bạn):
-- Drive: **https://drive.google.com/drive/folders/13q0RGBR-XyaHXQwd2LH7zw_7BmUC4MkR**
-
-Tải các file về máy và đặt vào `./checkpoints/` với đúng tên:
-- `faster_rcnn_from_caffe_attr.pkl`  (trên 200MB)
-- `faster_rcnn_R_101_C4_attr_caffemaxpool.yaml`
-- `vocab_coco.json`
-- (tuỳ chọn) `xe_best.pt`, `scst_best.pt`
-
-> **Lưu ý**: repo GitHub không nên commit file >200MB. Hãy để link tải trong README (như trên).
-
-### Cách B — Tải trực tiếp BUTD detector
-- PTH: **http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl**
-- Sau khi tải, chép vào `./checkpoints/faster_rcnn_from_caffe_attr.pkl`
+- Thư mục Drive bạn đã public chứa đủ file (nếu muốn dùng):  
+  **https://drive.google.com/drive/folders/13q0RGBR-XyaHXQwd2LH7zw_7BmUC4MkR**
 
 ---
 
-## 2) Cài đặt môi trường trên **WSL (Ubuntu)**
+## 3) Cài môi trường bằng `setup.sh` (1 lệnh duy nhất)
 
-> Yêu cầu: WSL2 + Ubuntu 22.04; đã cài `git`, `curl`. Khuyến nghị driver/NVIDIA nếu dùng CUDA.
+Trong WSL, đứng ở thư mục dự án:
 
-1. Cấp quyền & chạy script:
 ```bash
-chmod +x ./setup.sh
-./setup.sh
+chmod +x setup.sh
+./setup.sh .venv310
 ```
 
-2. Script sẽ tự động:
-- Cập nhật apt, cài `build-essential`, `cmake`, `git`, `ffmpeg`, `libgl1`, `libglib2.0-0`, v.v.
-- Tạo **virtualenv** Python 3.10 tại `~/.venv310` (tên như trong app).
-- Cài **torch**/**torchvision** matching CUDA (hoặc CPU), **detectron2==0.6** (build từ source) và deps phù hợp (`fvcore<0.1.6`, `iopath<0.1.10`, `pycocotools`, `opencv-python`, `gradio==4.44.1`, ...).
-- Pin `numpy<2` để tránh lỗi binary.
-- Cài *requirements.txt* của dự án.
+Script sẽ:
+- Cập nhật apt, cài công cụ build cần thiết.
+- Tạo **virtualenv** tại `.venv310/` (Python 3.10).
+- Cài các gói đúng phiên bản (đã **pin** để tránh xung đột):
+  - `torch==1.10.2+cu113`, `torchvision==0.11.3+cu113` (hoặc bản CPU nếu không có CUDA).
+  - `detectron2==0.6` (build từ source khớp Torch).
+  - `fvcore==0.1.5.post20221221`, `iopath==0.1.9`, `pycocotools`…
+  - `pillow<10` để tránh lỗi `Image.LINEAR` (đã xử lý trong mã nhưng vẫn pin cho chắc).
+  - `gradio==4.44.1` (ổn định) + patch nhỏ chống lỗi schema.
+- Kiểm tra việc nạp Detectron2.
 
-3. Kích hoạt môi trường (mỗi lần mở shell mới):
-```bash
-source ~/.venv310/bin/activate
-```
+> Nếu cuối script báo OK, bạn đã sẵn sàng chạy demo.
 
-4. Kiểm tra:
+**Kích hoạt môi trường (khi mở terminal mới):**
+
 ```bash
-python -c "import torch, detectron2, gradio; print(torch.__version__); print('detectron2 OK')"
+source .venv310/bin/activate
 ```
 
 ---
 
-## 3) Chạy **demo** Caption (CE vs SCST)
+## 4) Chạy demo Gradio
 
-> Yêu cầu đã có file trong `./checkpoints/`. Đổi biến môi trường nếu cần (dưới đây là mặc định).
+Vẫn trong thư mục dự án (đã `source .venv310/bin/activate`):
 
-### 3.1 Biến môi trường (mặc định trong `app_coco.py`)
+```bash
+python app_coco.py
+```
+
+- Mặc định server mở ở: **http://0.0.0.0:7860**  
+  (trên Windows, mở trình duyệt vào `http://localhost:7860`)
+
+### Thay đổi đường dẫn/tuỳ chọn bằng biến môi trường (không bắt buộc)
+
+Bạn có thể override các đường dẫn nếu để file ở vị trí khác:
+
 ```bash
 export BUTD_YAML=./checkpoints/faster_rcnn_R_101_C4_attr_caffemaxpool.yaml
 export BUTD_WEIGHT=./checkpoints/faster_rcnn_from_caffe_attr.pkl
 export BUTD_VOCAB=./checkpoints/vocab_coco.json
-export BUTD_CE_CKPT=./checkpoints/xe_best.pt        # nếu có
-export BUTD_SCST_CKPT=./checkpoints/scst_best.pt    # nếu có
-```
-
-> Nếu bạn **chưa có** `xe_best.pt` / `scst_best.pt`, app vẫn chạy và hiển thị nhưng chỉ bằng decoder tải được. Hãy cung cấp cả 2 để so sánh CE vs SCST.
-
-### 3.2 Chạy app
-```bash
-source ~/.venv310/bin/activate
+export BUTD_OBJ_VOCAB=./checkpoints/objects_vocab.txt
+export BUTD_ATTR_VOCAB=./checkpoints/attributes_vocab.txt
+export BUTD_CE_CKPT=./checkpoints/xe_best.pt
+export BUTD_SCST_CKPT=./checkpoints/scst_best.pt
 python app_coco.py
 ```
-- Mặc định listen ở `http://0.0.0.0:7860`
-- Nếu localhost bị chặn, bật chế độ share:
+
+Một số tham số khác (mặc định hợp lý):
+- `BUTD_NUM_OBJECTS` (mặc định `36`): số box/ảnh đưa vào decoder.
+- `BUTD_MIN_TEST`, `BUTD_MAX_TEST`: resize khung ngắn/dài.
+- `BUTD_RPN_TOPK`: top‑K proposals sau NMS ở RPN.
+
+---
+
+## 5) Lưu ý & xử lý lỗi thường gặp
+
+### 5.1 Lỗi Pillow `Image.LINEAR` / `Image.ANTIALIAS`
+
+- Script đã **pin** `pillow<10`. Nếu bạn lỡ nâng cấp, chạy:  
   ```bash
-  python app_coco.py --share  # (nếu bạn hỗ trợ flag; hoặc chỉnh trong code: share=True)
+  pip install "pillow<10" --upgrade
   ```
+- Trong `app_coco.py` cũng đã có shim để dùng `Resampling.BILINEAR/BICUBIC/LANCZOS` khi cần.
 
-### 3.3 Lưu ý UI
-- Thay đổi **Beam size / Length penalty / No-repeat / Max length** -> caption **được cập nhật** khi bạn:
-  - Nhấn **Run**, hoặc
-  - Bật chế độ **auto** (file đã bind `.change` trên các control — chỉ cần đã có ảnh).
-- **Top-K boxes to draw** chỉ ảnh hưởng trực quan; extractor vẫn dùng K chuẩn (36).
+### 5.2 Detectron2 báo skip một số tham số khi nạp checkpoint
 
----
+- Do khác biệt nhỏ giữa head trong YAML và model Caffe‑style; **không ảnh hưởng inference**. Đoạn code đã:
 
-## 4) Huấn luyện trên **Kaggle** với **SCAN features** (không dùng ảnh thô)
+  - Ép `C4` backbone với `RPN.CONV_DIMS = [512]`.
+  - Dùng **NMS class‑agnostic** để tránh “một vật nhiều khung”.
 
-> Dùng dataset: **https://www.kaggle.com/datasets/kuanghueilee/scan-features**  
-> Ưu điểm: giảm chi phí I/O, không cần Detectron2 trên Kaggle; chỉ train decoder CE/SCST.
+### 5.3 UI thay đổi tham số nhưng caption không đổi?
 
-### 4.1 Thiết lập Notebook (Kaggle)
-- Tạo Notebook mới (GPU bật nếu muốn tốc độ nhanh hơn).
-- Thêm **Dataset**: `kuanghueilee/scan-features` vào Notebook (button “Add data”).
-- Upload notebook của bạn (nếu đã có). Nếu dùng notebook sẵn của repo, bảo đảm các cell sau có mặt:
-  1. **Mount dataset**: trỏ tới `/kaggle/input/scan-features/`.
-  2. **Tạo vocab / split**: (đã có sẵn hàm trong notebook). Sinh `vocab_coco.json`, annotations `train/val` theo COCO.
-  3. **CE training**: Teacher forcing, lưu `xe_best.pt` vào `/kaggle/working/checkpoints/`.
-  4. **SCST training**: Dùng CIDEr làm reward, baseline = beam search, lưu `scst_best.pt`.
-  5. **Xuất file**: dùng `Output` của Kaggle để tải về hai checkpoint.
-
-> **Quan trọng**: Các đoạn code train của bạn phải đọc **features** (~`*.npy`, `*.pt`) từ dataset SCAN và không load ảnh thô. Hãy đảm bảo `DataLoader` / `predict_from_loader` tương thích.
-
-### 4.2 Tham số gợi ý (đủ minh hoạ)
-- **CE**: `LR=1e-3`, `batch_size=128`, `epochs=10~20`, `label_smoothing=0.1`
-- **SCST**: `LR=1e-5`, `epochs=5~30`, `SCST_MAXLEN=30`, `BEAM_BASELINE=5`, reward **CIDEr**
-
-> SCST đã có helper `safe_compute_cider` trong mã. Khi lưu, hãy đặt đúng tên: `xe_best.pt` / `scst_best.pt`.
-
-### 4.3 Dùng checkpoint train xong trên máy local/WSL
-- Copy về `./checkpoints/xe_best.pt` và `./checkpoints/scst_best.pt` (local).
-- Chạy lại app (mục 3) để so sánh CE vs SCST.
+- Bật “Cache features by image” thì thay đổi tham số decode **không cần** trích xuất lại đặc trưng; caption sẽ thay đổi khi bạn bấm **Run** hoặc chỉnh `decode strategy/beam size/...` (trang đã đăng ký auto refresh cho các control).
 
 ---
 
-## 5) Mẹo hiệu năng & chất lượng
-- **Extractor nhanh hơn**: bật `torch.backends.cudnn.benchmark = True` (đã bật) và AMP (`torch.amp.autocast`) trong detector.
-- **Giảm box trùng**: đã thêm bước *khử trùng lặp IoU* và tăng score threshold/NMS (đỡ “một đối tượng nhiều box”).
-- **Beam search**: `beam=3~5`, `len_penalty~1.0→1.2`, `no_repeat_ngram=1~3` cho caption mượt hơn.
+## 6) (Tùy chọn) Train trên **Kaggle** bằng **SCAN features**
+
+Nếu bạn chỉ muốn demo train/finetune nhanh mà **không xử lý ảnh thô**, dùng dataset:  
+**https://www.kaggle.com/datasets/kuanghueilee/scan-features**
+
+Cách làm tối giản:
+1. Tạo **Kaggle Notebook** (GPU bật **on**).
+2. Ở tab **Add data** → thêm dataset “`kuanghueilee/scan-features`”.
+3. Upload notebook có sẵn trong repo: **`iamge-captioning-butd.ipynb`** (đã có các hàm chia dữ liệu, tạo vocab, loader từ features).  
+   - Chỉ cần sửa **đường dẫn base** tới thư mục features của Kaggle nếu notebook yêu cầu (`/kaggle/input/scan-features/…`).  
+   - Chạy toàn bộ cell → huấn luyện **CE** trước, sau đó **SCST** (đã có helper CIDEr/RL).
+4. Checkpoint sinh ra có thể tải về và đặt vào thư mục `checkpoints/` để dùng với `app_coco.py`.
+
+> Lưu ý: SCST cần `pycocoevalcap` (đã nằm trong `setup.sh` và notebook).
 
 ---
 
-## 6) Khắc phục lỗi thường gặp
-- **Detectron2 skip weights / shape mismatch**: đúng, vì checkpoint Caffe-style; code đã patch tuyến suy luận tương thích.
-- **Gradio “bool is not iterable / schema”**: đã patch vào `app_coco.py` (vô hiệu đường dẫn schema gây lỗi).
-- **NumPy 2.x**: đã pin `numpy<2` trong cài đặt.
-- **Localhost không vào được**: dùng `share=True` khi launch Gradio.
+## 7) Lệnh nhanh (copy/paste)
 
----
-
-## 7) Gợi ý commit lên GitHub
-- **Không** commit file >200MB (đặc biệt `.pkl` detector, các `.pt` lớn). Thay thế bằng **link tải** (Drive / URL UNC).
-- Ví dụ trong README:
-  - UNC: `http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl`
-  - Drive: `https://drive.google.com/drive/folders/13q0RGBR-XyaHXQwd2LH7zw_7BmUC4MkR`
-
----
-
-## 8) Chạy nhanh (tóm tắt)
 ```bash
-# 1) Tải checkpoints vào ./checkpoints/
-#    - UNC URL (detector): http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl
-#    - Hoặc Drive đầy đủ:  https://drive.google.com/drive/folders/13q0RGBR-XyaHXQwd2LH7zw_7BmUC4MkR
+# 0) vào thư mục dự án
+cd ~/Image_Captioning_BUTD
 
-# 2) Cài môi trường (WSL)
-chmod +x setup.sh && ./setup.sh
-source ~/.venv310/bin/activate
+# 1) cài môi trường
+chmod +x setup.sh
+./setup.sh .venv310
 
-# 3) Chạy app
+# 2) kích hoạt venv mỗi lần mở terminal mới
+source .venv310/bin/activate
+
+# 3) (đảm bảo file nặng đã có)
+#    - checkpoints/faster_rcnn_from_caffe_attr.pkl
+#    - các file vocab + checkpoint CE/SCST
+#    nếu thiếu file nặng, tải:
+#    http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl
+
+# 4) chạy demo
 python app_coco.py
-# Mở http://0.0.0.0:7860, upload ảnh → chỉnh beam/no-repeat/len_pen → xem CE vs SCST
+# -> mở http://localhost:7860
 ```
 
 ---
 
-## 9) Liên hệ
-Nếu bạn vẫn gặp lỗi môi trường, hãy gửi:
-- OS/WSL version, GPU/CUDA
-- `python -V`, `pip list | grep -E "torch|torchvision|detectron2|gradio|numpy"`
-- Log lỗi đầy đủ khi chạy `python app_coco.py`
+## 8) Góp ý
+
+Nếu bạn muốn đóng gói lại (đổi cổng, bật `share=True`, …), sửa phần cuối `app_coco.py` trong `demo.queue().launch(...)`.
 
 Chúc bạn chạy mượt! 🚀
